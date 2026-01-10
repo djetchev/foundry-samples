@@ -300,34 +300,51 @@ nslookup <fabric-workspace>.analysis.windows.net
 
 MCP (Model Context Protocol) Remote Servers can be deployed on the VNet to provide additional tools to AI agents while maintaining network isolation.
 
+> **Note:** The agent subnet is delegated to `Microsoft.App/environments` (Azure Container Apps), not `Microsoft.ContainerInstance/containerGroups`. You must use Azure Container Apps to deploy containers in this subnet.
+
 ### 6.2 Deploy MCP Everything Server
 
-Deploy an MCP server container in the VNet using Azure Container Instances:
+Deploy an MCP server container in the VNet using Azure Container Apps:
 
 ```bash
-# Create container in the agent subnet
-az container create \
+# Step 1: Create a Container Apps Environment connected to the VNet
+az containerapp env create \
+  --resource-group "rg-private-network-test" \
+  --name "mcp-env" \
+  --location "norwayeast" \
+  --infrastructure-subnet-resource-id "/subscriptions/<sub-id>/resourceGroups/rg-private-network-test/providers/Microsoft.Network/virtualNetworks/<vnet-name>/subnets/agent-subnet" \
+  --internal-only true
+
+# Step 2: Deploy the MCP server as a Container App
+az containerapp create \
   --resource-group "rg-private-network-test" \
   --name "mcp-everything-server" \
+  --environment "mcp-env" \
   --image "mcpeverything/server:latest" \
-  --vnet "<vnet-name>" \
-  --subnet "agent-subnet" \
-  --ports 8080 \
-  --cpu 1 \
-  --memory 1
+  --target-port 8080 \
+  --ingress internal \
+  --cpu 1.0 \
+  --memory 2.0Gi
+
+# Step 3: Get the internal FQDN of the MCP server
+az containerapp show \
+  --resource-group "rg-private-network-test" \
+  --name "mcp-everything-server" \
+  --query "properties.configuration.ingress.fqdn" -o tsv
 ```
 
 ### 6.3 Verify MCP Server is Only Accessible from VNet
 
 **From within the VNet (should work):**
 ```bash
-curl http://<mcp-server-private-ip>:8080/health
+# Use the FQDN from the previous step
+curl http://<mcp-server-fqdn>/health
 ```
 
 **From outside the VNet (should fail):**
 ```bash
 # This should timeout or fail - confirming network isolation
-curl --connect-timeout 5 http://<mcp-server-private-ip>:8080/health
+curl --connect-timeout 5 http://<mcp-server-fqdn>/health
 ```
 
 ### 6.4 Configure Agent to Use MCP Server
@@ -337,7 +354,7 @@ Once the MCP server is running on the VNet, configure your AI Foundry agent to u
 1. Navigate to Azure AI Foundry portal
 2. Access your project (created by the deployment)
 3. Create or edit an agent
-4. Add MCP server endpoint as a tool source: `http://<mcp-server-private-ip>:8080`
+4. Add MCP server endpoint as a tool source: `http://<mcp-server-fqdn>:8080`
 
 ---
 
