@@ -125,8 +125,9 @@ az deployment group create \
 | `modelName` | Model to deploy | `gpt-4o` |
 | `modelCapacity` | TPM capacity | `30` |
 | `vnetName` | VNet name | `agent-vnet-test` |
-| `agentSubnetName` | Agent subnet name | `agent-subnet` |
+| `agentSubnetName` | Agent subnet name (reserved for AI Foundry) | `agent-subnet` |
 | `peSubnetName` | Private endpoint subnet | `pe-subnet` |
+| `mcpSubnetName` | MCP subnet for user Container Apps | `mcp-subnet` |
 | `existingVnetResourceId` | Existing VNet resource ID | `""` (creates new) |
 | `aiSearchResourceId` | Existing AI Search resource ID | `""` (creates new) |
 | `azureStorageAccountResourceId` | Existing Storage resource ID | `""` (creates new) |
@@ -300,19 +301,19 @@ nslookup <fabric-workspace>.analysis.windows.net
 
 MCP (Model Context Protocol) Remote Servers can be deployed on the VNet to provide additional tools to AI agents while maintaining network isolation.
 
-> **Note:** The agent subnet is delegated to `Microsoft.App/environments` (Azure Container Apps), not `Microsoft.ContainerInstance/containerGroups`. You must use Azure Container Apps to deploy containers in this subnet.
+> **Important:** The `agent-subnet` is reserved for Azure AI Foundry's internal Container Apps environment and cannot be shared with user-deployed containers. The Bicep template automatically creates a separate `mcp-subnet` for your MCP servers and other user-deployed Container Apps.
 
 ### 6.2 Deploy MCP Everything Server
 
 Deploy an MCP server container in the VNet using Azure Container Apps:
 
 ```bash
-# Step 1: Create a Container Apps Environment connected to the VNet
+# Step 1: Create a Container Apps Environment connected to the MCP subnet
 az containerapp env create \
   --resource-group "rg-private-network-test" \
   --name "mcp-env" \
   --location "norwayeast" \
-  --infrastructure-subnet-resource-id "/subscriptions/<sub-id>/resourceGroups/rg-private-network-test/providers/Microsoft.Network/virtualNetworks/<vnet-name>/subnets/agent-subnet" \
+  --infrastructure-subnet-resource-id "/subscriptions/<sub-id>/resourceGroups/rg-private-network-test/providers/Microsoft.Network/virtualNetworks/<vnet-name>/subnets/mcp-subnet" \
   --internal-only true
 
 # Step 2: Deploy the MCP server as a Container App
@@ -428,6 +429,22 @@ az network private-dns link vnet list \
 **Solution:**
 - Verify the Fabric resource ID format
 - Ensure Fabric capacity supports private link
+
+#### 5. "ManagedEnvironmentSubnetInUse" Error When Deploying MCP Server
+
+**Cause:** You attempted to create a Container Apps environment in the `agent-subnet`, which is already reserved for Azure AI Foundry's internal Container Apps environment.
+
+**Error message:**
+```
+The subnet '.../subnets/agent-subnet' is already used by environment '.../Microsoft.App/managedEnvironments/...'
+```
+
+**Solution:**
+- Use the `mcp-subnet` instead of `agent-subnet` when creating your Container Apps environment
+- The Bicep template automatically creates three subnets:
+  - `agent-subnet` — Reserved for Azure AI Foundry (do not use)
+  - `pe-subnet` — For private endpoints
+  - `mcp-subnet` — For user-deployed Container Apps (MCP servers, etc.)
 
 ### Useful Diagnostic Commands
 

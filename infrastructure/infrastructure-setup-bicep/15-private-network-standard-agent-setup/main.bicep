@@ -71,6 +71,9 @@ param agentSubnetName string = 'agent-subnet'
 @description('The name of Private Endpoint subnet to create new or existing subnet for private endpoints')
 param peSubnetName string = 'pe-subnet'
 
+@description('The name of MCP subnet for user-deployed Container Apps (e.g., MCP servers)')
+param mcpSubnetName string = 'mcp-subnet'
+
 //Existing standard Agent required resources
 @description('Existing Virtual Network name Resource ID')
 param existingVnetResourceId string = ''
@@ -84,7 +87,10 @@ param agentSubnetPrefix string = ''
 @description('Address prefix for the private endpoint subnet')
 param peSubnetPrefix string = ''
 
-@description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
+@description('Address prefix for the MCP subnet. The default value is 192.168.2.0/24.')
+param mcpSubnetPrefix string = ''
+
+@description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.'))
 param aiSearchResourceId string = ''
 @description('The AI Storage Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param azureStorageAccountResourceId string = ''
@@ -162,9 +168,11 @@ module vnet 'modules-network-secured/network-agent-vnet.bicep' = {
     existingVnetResourceGroupName: vnetResourceGroupName
     agentSubnetName: agentSubnetName
     peSubnetName: peSubnetName
+    mcpSubnetName: mcpSubnetName
     vnetAddressPrefix: vnetAddressPrefix
     agentSubnetPrefix: agentSubnetPrefix
     peSubnetPrefix: peSubnetPrefix
+    mcpSubnetPrefix: mcpSubnetPrefix
     existingVnetSubscriptionId: vnetSubscriptionId
   }
 }
