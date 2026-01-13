@@ -90,7 +90,7 @@ param peSubnetPrefix string = ''
 @description('Address prefix for the MCP subnet. The default value is 192.168.2.0/24.')
 param mcpSubnetPrefix string = ''
 
-@description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.'))
+@description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param aiSearchResourceId string = ''
 @description('The AI Storage Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param azureStorageAccountResourceId string = ''
