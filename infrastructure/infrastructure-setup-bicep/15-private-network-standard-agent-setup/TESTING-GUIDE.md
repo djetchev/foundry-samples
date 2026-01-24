@@ -196,6 +196,33 @@ Expected DNS zones:
 Since all resources are behind private endpoints, you must access from within the VNet:
 
 **Option 1: Deploy a Jump Box VM**
+
+A **jump box** is a secure intermediary VM that provides access to private resources. It has a public IP (so you can SSH in from the internet) and a private IP (so it can access resources inside the VNet). You SSH into the jump box first, then access private resources from there.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Private VNet                            │
+│                                                             │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│   │ AI Search│  │ Cosmos DB│  │ Storage  │  │ AI Svc   │    │
+│   │ (private)│  │ (private)│  │ (private)│  │ (private)│    │
+│   └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+│        ▲              ▲             ▲             ▲         │
+│        └──────────────┴─────────────┴─────────────┘         │
+│                           │                                 │
+│                    ┌──────────────┐                         │
+│                    │   Jump Box   │ ◄── Has private access  │
+│                    │  (your VM)   │                         │
+│                    └──────────────┘                         │
+│                           ▲                                 │
+└───────────────────────────│─────────────────────────────────┘
+                            │ SSH (port 22)
+                      ┌─────────────┐
+                      │    You      │
+                      │ (Internet)  │
+                      └─────────────┘
+```
+
 ```bash
 az vm create \
   --resource-group "rg-private-network-test" \
@@ -317,38 +344,97 @@ az containerapp env create \
   --internal-only true
 
 # Step 2: Deploy the MCP server as a Container App
+# Note: Use --ingress external (not internal) to allow access from VMs in the VNet
+# The "external" setting means accessible outside the Container Apps environment
+# Since the environment is internal-only, it's still only accessible within the VNet
 az containerapp create \
   --resource-group "rg-private-network-test" \
   --name "mcp-everything-server" \
   --environment "mcp-env" \
   --image "mcpeverything/server:latest" \
   --target-port 8080 \
-  --ingress internal \
+  --ingress external \
   --cpu 1.0 \
-  --memory 2.0Gi
+  --memory 2.0Gi \
+  --min-replicas 1
 
-# Step 3: Get the internal FQDN of the MCP server
-az containerapp show \
+# Step 3: Get the FQDN and static IP
+MCP_FQDN=$(az containerapp show \
   --resource-group "rg-private-network-test" \
   --name "mcp-everything-server" \
-  --query "properties.configuration.ingress.fqdn" -o tsv
+  --query "properties.configuration.ingress.fqdn" -o tsv)
+echo "MCP Server FQDN: $MCP_FQDN"
+
+MCP_STATIC_IP=$(az containerapp env show \
+  --name "mcp-env" \
+  --resource-group "rg-private-network-test" \
+  --query "properties.staticIp" -o tsv)
+echo "Static IP: $MCP_STATIC_IP"
+
+# Step 4: Get the default domain for DNS zone creation
+DEFAULT_DOMAIN=$(az containerapp env show \
+  --name "mcp-env" \
+  --resource-group "rg-private-network-test" \
+  --query "properties.defaultDomain" -o tsv)
+echo "Default domain: $DEFAULT_DOMAIN"
 ```
 
-### 6.3 Verify MCP Server is Only Accessible from VNet
+### 6.3 Configure Private DNS for Container Apps
 
-**From within the VNet (should work):**
+Container Apps with internal environments don't automatically configure DNS resolution within the VNet. You must create a private DNS zone:
+
 ```bash
-# Use the FQDN from the previous step
-curl http://<mcp-server-fqdn>/health
+# Step 1: Create a private DNS zone for the Container Apps environment
+az network private-dns zone create \
+  --resource-group "rg-private-network-test" \
+  --name "$DEFAULT_DOMAIN"
+
+# Step 2: Link the DNS zone to the VNet
+az network private-dns link vnet create \
+  --resource-group "rg-private-network-test" \
+  --zone-name "$DEFAULT_DOMAIN" \
+  --name "containerapp-link" \
+  --virtual-network "/subscriptions/<sub-id>/resourceGroups/rg-private-network-test/providers/Microsoft.Network/virtualNetworks/<vnet-name>" \
+  --registration-enabled false
+
+# Step 3: Add A record for the MCP server
+az network private-dns record-set a add-record \
+  --resource-group "rg-private-network-test" \
+  --zone-name "$DEFAULT_DOMAIN" \
+  --record-set-name "mcp-everything-server" \
+  --ipv4-address "$MCP_STATIC_IP"
+
+# Step 4: Add wildcard record for any future Container Apps
+az network private-dns record-set a add-record \
+  --resource-group "rg-private-network-test" \
+  --zone-name "$DEFAULT_DOMAIN" \
+  --record-set-name "*" \
+  --ipv4-address "$MCP_STATIC_IP"
 ```
+
+### 6.4 Verify MCP Server is Only Accessible from VNet
 
 **From outside the VNet (should fail):**
 ```bash
 # This should timeout or fail - confirming network isolation
-curl --connect-timeout 5 http://<mcp-server-fqdn>/health
+curl --connect-timeout 5 https://<mcp-server-fqdn>/health
 ```
 
-### 6.4 Configure Agent to Use MCP Server
+**From within the VNet (should work):**
+
+After setting up the private DNS zone and records (Step 6.3), you can access the Container App directly by FQDN:
+
+```bash
+# From the jump box - DNS should resolve to the static IP
+nslookup <mcp-server-fqdn>
+
+# Access the container app via HTTPS
+curl -sk https://<mcp-server-fqdn>
+```
+
+> **Note:** The `-k` flag is needed because the certificate is issued for `*.azurecontainerapps.io` which may not match perfectly in all cases.
+
+### 6.5 Configure Agent to Use MCP Server
 
 Once the MCP server is running on the VNet, configure your AI Foundry agent to use it as a tool provider:
 
@@ -445,6 +531,36 @@ The subnet '.../subnets/agent-subnet' is already used by environment '.../Micros
   - `agent-subnet` — Reserved for Azure AI Foundry (do not use)
   - `pe-subnet` — For private endpoints
   - `mcp-subnet` — For user-deployed Container Apps (MCP servers, etc.)
+
+#### 6. Container App Returns 404 "This Container App is stopped or does not exist"
+
+**Cause:** One of these issues:
+1. Container App ingress is set to `internal` instead of `external`
+2. Private DNS zone not configured for Container Apps environment
+3. Container is scaled to zero
+
+**Solution:**
+
+1. **Change ingress to external** (this allows access from within the VNet, not just within the Container Apps environment):
+   ```bash
+   az containerapp ingress update \
+     --name "<app-name>" \
+     --resource-group "<rg-name>" \
+     --type external
+   ```
+
+2. **Set up private DNS** (see Step 6.3):
+   - Create private DNS zone for the Container Apps domain
+   - Link it to the VNet
+   - Add A records pointing to the static IP
+
+3. **Ensure container is running**:
+   ```bash
+   az containerapp update \
+     --name "<app-name>" \
+     --resource-group "<rg-name>" \
+     --min-replicas 1
+   ```
 
 ### Useful Diagnostic Commands
 
